@@ -36,7 +36,7 @@ async def health_check():
 async def get_colleges(
     state: Optional[str] = Query(None, description="Filter by state abbreviation (e.g. CA, NY, TX)"),
     page: int = Query(0, description="Page number (0-indexed)"),
-    per_page: int = Query(20, le=100, description="Results per page (max 100)"),
+    per_page: int = Query(50, le=50, description="Results per page (max 50)"),
 ):
     fields = ",".join([
         # Basic Info
@@ -153,7 +153,7 @@ async def get_colleges(
         "fields": fields,
         "per_page": per_page,
         "page": page,
-        "sort": "latest.admissions.sat_scores.average.overall:desc",
+        "sort": "latest.student.size:desc",
     }
 
     if state:
