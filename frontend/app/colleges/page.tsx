@@ -9,6 +9,90 @@ import { College } from "@/types/college";
 import CollegeCard from "@/components/CollegeCard";
 import Link from "next/link";
 
+type BackendCategory = "Safety" | "Target" | "Reach";
+
+interface RankingMatch {
+  interest?: string;
+  category?: string;
+}
+
+interface BackendCollege {
+  id?: number;
+  category?: BackendCategory;
+  recommendation_score?: number;
+  admission_probability?: number;
+  ranking_matches?: RankingMatch[];
+  [key: string]: unknown;
+}
+
+interface BackendResponse {
+  results?: BackendCollege[];
+}
+
+function getNumber(row: BackendCollege, key: string): number | null {
+  const value = row[key];
+  return typeof value === "number" ? value : null;
+}
+
+function getString(row: BackendCollege, key: string): string | null {
+  const value = row[key];
+  return typeof value === "string" ? value : null;
+}
+
+function localeToSetting(locale: number | null): "urban" | "suburban" | "rural" {
+  if (locale !== null) {
+    if (locale >= 11 && locale <= 13) return "urban";
+    if (locale >= 21 && locale <= 23) return "suburban";
+  }
+  return "rural";
+}
+
+function mapBackendCollegeToUiCollege(row: BackendCollege, index: number, fallbackMajor: string): College {
+  const name = getString(row, "school.name") || "Unknown College";
+  const city = getString(row, "school.city") || "";
+  const state = getString(row, "school.state") || "";
+  const location = [city, state].filter(Boolean).join(", ") || "Unknown Location";
+
+  const admissionRateRaw = getNumber(row, "latest.admissions.admission_rate.overall");
+  const acceptanceRate = admissionRateRaw !== null ? Math.round(admissionRateRaw * 1000) / 10 : 50;
+
+  const avgSAT = getNumber(row, "latest.admissions.sat_scores.average.overall") ?? 1200;
+  const avgCost =
+    getNumber(row, "latest.cost.attendance.academic_year") ??
+    getNumber(row, "latest.cost.avg_net_price.public") ??
+    getNumber(row, "latest.cost.avg_net_price.private") ??
+    0;
+
+  const studentSize = getNumber(row, "latest.student.size") ?? 10000;
+  const locale = getNumber(row, "school.locale");
+  const setting = localeToSetting(locale);
+
+  const rankingMatches = Array.isArray(row.ranking_matches) ? row.ranking_matches : [];
+  const majorsFromRanking = rankingMatches
+    .map((m) => (typeof m?.interest === "string" ? m.interest : null))
+    .filter((m): m is string => Boolean(m));
+  const majors = majorsFromRanking.length > 0 ? Array.from(new Set(majorsFromRanking)) : [fallbackMajor];
+
+  return {
+    id: String(row.id ?? `${name}-${index}`),
+    name,
+    location,
+    avgGPA: 3.6,
+    avgSAT,
+    acceptanceRate,
+    avgCost,
+    ranking: index + 1,
+    majors,
+    essays: [],
+    deadline: "",
+    category: row.category,
+    admissionProbability: typeof row.admission_probability === "number" ? row.admission_probability : undefined,
+    alignmentScore: typeof row.recommendation_score === "number" ? row.recommendation_score : undefined,
+    studentSize,
+    setting,
+  };
+}
+
 export default function CollegesPage() {
   const { profile } = useApp();
   const searchParams = useSearchParams();
@@ -19,22 +103,90 @@ export default function CollegesPage() {
   const [sortBy, setSortBy] = useState<"alignment" | "probability" | "cost">("alignment");
 
   useEffect(() => {
-    let collegeList = allColleges;
-    
-    if (searchQuery.trim()) {
-      collegeList = allColleges.filter(c =>
-        c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        c.location.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (c.majors && c.majors.some(m => m.toLowerCase().includes(searchQuery.toLowerCase())))
-      );
-    }
+    let cancelled = false;
 
-    if (profile) {
-      const recommended = recommendColleges(collegeList, profile);
-      setColleges(recommended);
-    } else {
-      setColleges(collegeList);
-    }
+    const loadRecommendations = async () => {
+      if (!profile) {
+        setColleges([]);
+        return;
+      }
+
+      try {
+        const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8005";
+        const params = new URLSearchParams();
+
+        params.set("gpa", String(profile.gpa));
+        if (typeof profile.weightedGpa === "number") params.set("weightedGpa", String(profile.weightedGpa));
+        params.set("satScore", String(profile.satScore));
+        params.set("intendedMajor", profile.intendedMajor);
+        params.set("locationPreference", profile.locationPreference || "");
+        params.set("maxCost", String(profile.maxCost));
+        params.set("careerGoals", profile.careerGoals || "");
+        if (profile.schoolSize) params.set("schoolSize", profile.schoolSize);
+        if (profile.settingPreference) params.set("settingPreference", profile.settingPreference);
+        params.set("extracurricularCount", String(profile.extracurriculars?.length || 0));
+        params.set("per_page", "50");
+        params.set("page", "0");
+
+        for (const interest of profile.academicInterests || []) {
+          if (interest?.trim()) params.append("academicInterests", interest.trim());
+        }
+
+        const response = await fetch(`${apiBase}/api/colleges?${params.toString()}`);
+        if (!response.ok) {
+          throw new Error(`API request failed with status ${response.status}`);
+        }
+
+        const data = (await response.json()) as BackendResponse;
+        const rows = Array.isArray(data.results) ? data.results : [];
+        const mapped = rows.map((row, index) => mapBackendCollegeToUiCollege(row, index, profile.intendedMajor));
+
+        // Backfill missing values if backend doesn't return recommendation fields for any reason
+        const locallyScored = recommendColleges(mapped, profile);
+        const localById = new Map(locallyScored.map((c) => [c.id, c]));
+        const normalized = mapped.map((c) => {
+          const local = localById.get(c.id);
+          return {
+            ...c,
+            alignmentScore: c.alignmentScore ?? local?.alignmentScore,
+            admissionProbability: c.admissionProbability ?? local?.admissionProbability,
+            category: c.category ?? local?.category,
+          };
+        });
+
+        const filtered = searchQuery.trim()
+          ? normalized.filter((c) =>
+              c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+              c.location.toLowerCase().includes(searchQuery.toLowerCase()) ||
+              c.majors.some((m) => m.toLowerCase().includes(searchQuery.toLowerCase()))
+            )
+          : normalized;
+
+        if (!cancelled) {
+          setColleges(filtered);
+        }
+      } catch (error) {
+        console.error("Failed to load backend recommendations, falling back to local data:", error);
+        let fallback = allColleges;
+        if (searchQuery.trim()) {
+          fallback = allColleges.filter((c) =>
+            c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            c.location.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            (c.majors && c.majors.some((m) => m.toLowerCase().includes(searchQuery.toLowerCase())))
+          );
+        }
+        const fallbackRecommended = recommendColleges(fallback, profile);
+        if (!cancelled) {
+          setColleges(fallbackRecommended);
+        }
+      }
+    };
+
+    void loadRecommendations();
+
+    return () => {
+      cancelled = true;
+    };
   }, [profile, searchQuery]);
 
   const filteredColleges = colleges.filter((college) =>

@@ -83,13 +83,15 @@ export default function CollegeCard({ college }: CollegeCardProps) {
         </button>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '1rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem', marginBottom: '1rem' }}>
         <div style={{
           padding: '0.75rem',
           background: 'var(--bg-secondary)',
           borderRadius: '0.5rem',
+          display: 'flex',
+          flexDirection: 'column',
         }}>
-          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.25rem', minHeight: '2.5rem', lineHeight: 1.35 }}>
             Acceptance Rate
           </div>
           <div style={{ fontSize: '1.25rem', fontWeight: 700 }}>
@@ -100,12 +102,32 @@ export default function CollegeCard({ college }: CollegeCardProps) {
           padding: '0.75rem',
           background: 'var(--bg-secondary)',
           borderRadius: '0.5rem',
+          display: 'flex',
+          flexDirection: 'column',
         }}>
-          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.25rem', minHeight: '2.5rem', lineHeight: 1.35 }}>
             Match Score
           </div>
           <div style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--accent-orange)' }}>
-            {college.alignmentScore ? `${Math.round(college.alignmentScore)}%` : "N/A"}
+            {college.alignmentScore !== undefined && college.alignmentScore !== null
+              ? `${Math.round(college.alignmentScore)}%`
+              : "N/A"}
+          </div>
+        </div>
+        <div style={{
+          padding: '0.75rem',
+          background: 'var(--bg-secondary)',
+          borderRadius: '0.5rem',
+          display: 'flex',
+          flexDirection: 'column',
+        }}>
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.25rem', minHeight: '2.5rem', lineHeight: 1.35 }}>
+            Admission Probability
+          </div>
+          <div style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--accent-orange)' }}>
+            {college.admissionProbability !== undefined && college.admissionProbability !== null
+              ? `${Math.round(college.admissionProbability)}%`
+              : "N/A"}
           </div>
         </div>
       </div>
