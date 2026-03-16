@@ -6,6 +6,7 @@ import Link from "next/link";
 import CollegeCard from "@/components/CollegeCard";
 import { colleges as allColleges } from "@/lib/collegeData";
 import { recommendColleges } from "@/lib/scoring";
+import { fetchRecommendedColleges } from "@/lib/recommendationApi";
 import { useEffect, useState } from "react";
 import { College } from "@/types/college";
 
@@ -15,13 +16,49 @@ export default function DashboardPage() {
   const [topColleges, setTopColleges] = useState<College[]>([]);
 
   useEffect(() => {
-    if (profile) {
-      const recommended = recommendColleges(allColleges, profile);
-      const sorted = [...recommended].sort((a, b) => 
-        (b.alignmentScore || 0) - (a.alignmentScore || 0)
-      );
-      setTopColleges(sorted.slice(0, 6));
-    }
+    let cancelled = false;
+
+    const loadTopMatches = async () => {
+      if (!profile) {
+        setTopColleges([]);
+        return;
+      }
+
+      try {
+        const backendResults = await fetchRecommendedColleges(profile, { page: 0, perPage: 50 });
+
+        // Backfill any missing score fields to avoid empty metrics
+        const locallyScored = recommendColleges(backendResults, profile);
+        const localById = new Map(locallyScored.map((c) => [c.id, c]));
+        const normalized = backendResults.map((c) => {
+          const local = localById.get(c.id);
+          return {
+            ...c,
+            alignmentScore: c.alignmentScore ?? local?.alignmentScore,
+            admissionProbability: c.admissionProbability ?? local?.admissionProbability,
+            category: c.category ?? local?.category,
+          };
+        });
+
+        const sorted = [...normalized].sort((a, b) => (b.alignmentScore || 0) - (a.alignmentScore || 0));
+        if (!cancelled) {
+          setTopColleges(sorted.slice(0, 6));
+        }
+      } catch (error) {
+        console.error("Failed to load dashboard backend recommendations, using local fallback:", error);
+        const fallbackRecommended = recommendColleges(allColleges, profile);
+        const fallbackSorted = [...fallbackRecommended].sort((a, b) => (b.alignmentScore || 0) - (a.alignmentScore || 0));
+        if (!cancelled) {
+          setTopColleges(fallbackSorted.slice(0, 6));
+        }
+      }
+    };
+
+    void loadTopMatches();
+
+    return () => {
+      cancelled = true;
+    };
   }, [profile]);
 
   if (!profile) {
