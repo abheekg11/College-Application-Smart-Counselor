@@ -1,8 +1,9 @@
 "use client";
 
 import { useApp } from "@/lib/AppContext";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
+import { fetchCollegeEssayPrompts } from "@/lib/essayApi";
 
 type EssayStatus = "not-started" | "draft" | "completed";
 
@@ -17,24 +18,55 @@ interface Essay {
 
 export default function EssayPage() {
   const { profile, savedColleges } = useApp();
-  
-  // Generate essays from saved colleges
-  const [essays, setEssays] = useState<Essay[]>(() => {
-    const allEssays: Essay[] = [];
-    savedColleges.forEach(college => {
-      college.essays.forEach(essayReq => {
-        allEssays.push({
-          collegeId: college.id,
-          collegeName: college.name,
-          prompt: essayReq.question,
-          wordLimit: essayReq.wordLimit,
-          status: "not-started",
-          content: ""
+  const [essays, setEssays] = useState<Essay[]>([]);
+  const [loadingEssays, setLoadingEssays] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadEssays = async () => {
+      if (savedColleges.length === 0) {
+        setEssays([]);
+        return;
+      }
+
+      setLoadingEssays(true);
+      const allEssays: Essay[] = [];
+
+      for (const college of savedColleges) {
+        let promptsFromApi: Array<{ question: string; wordLimit: number; required: boolean }> = [];
+
+        try {
+          promptsFromApi = await fetchCollegeEssayPrompts(college.name);
+        } catch {
+          promptsFromApi = [];
+        }
+
+        const prompts = promptsFromApi.length > 0 ? promptsFromApi : college.essays;
+        prompts.forEach((essayReq) => {
+          allEssays.push({
+            collegeId: college.id,
+            collegeName: college.name,
+            prompt: essayReq.question,
+            wordLimit: essayReq.wordLimit,
+            status: "not-started",
+            content: "",
+          });
         });
-      });
-    });
-    return allEssays;
-  });
+      }
+
+      if (!cancelled) {
+        setEssays(allEssays);
+        setLoadingEssays(false);
+      }
+    };
+
+    void loadEssays();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [savedColleges]);
 
   const updateEssayStatus = (index: number, status: EssayStatus) => {
     setEssays(prev => prev.map((essay, i) => 
@@ -61,6 +93,19 @@ export default function EssayPage() {
         <Link href="/profile" className="btn btn-primary">
           Build Your Profile
         </Link>
+      </div>
+    );
+  }
+
+  if (loadingEssays) {
+    return (
+      <div style={{ textAlign: 'center', padding: '5rem 1rem' }}>
+        <h2 style={{ fontSize: '2rem', fontWeight: 600, marginBottom: '1rem' }}>
+          Loading Essays...
+        </h2>
+        <p style={{ color: 'var(--text-secondary)', fontSize: '1.125rem' }}>
+          Fetching the latest prompts for your saved colleges.
+        </p>
       </div>
     );
   }

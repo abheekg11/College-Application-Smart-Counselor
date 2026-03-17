@@ -127,6 +127,16 @@ STATE_ABBR_TO_RANKINGS_FILE = {
 }
 
 RANKINGS_CACHE: dict[str, dict] = {}
+COLLEGE_ESSAYS_INDEX: Optional[dict[str, dict[str, str]]] = None
+
+GROUP_SCHOOL_ALIASES = {
+    "university of california": ["uc"],
+    "california state university": ["csu", "cal state"],
+    "state university of new york": ["suny"],
+    "city university of new york": ["cuny"],
+    "university of texas": ["ut"],
+    "university of massachusetts": ["umass"],
+}
 
 
 def _get_rankings_index_for_location(location_preference: Optional[str]) -> dict:
@@ -159,6 +169,64 @@ def _get_rankings_index_for_location(location_preference: Optional[str]) -> dict
         return RANKINGS_CACHE["rankings-data-clean.json"]
 
     return RANKINGS_CACHE[file_name]
+
+
+def _get_college_essays_index() -> dict[str, dict[str, str]]:
+    global COLLEGE_ESSAYS_INDEX
+    if COLLEGE_ESSAYS_INDEX is not None:
+        return COLLEGE_ESSAYS_INDEX
+
+    try:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        essays_path = os.path.join(script_dir, "college_essays.json")
+        with open(essays_path, "r", encoding="utf-8-sig") as f:
+            raw = json.load(f)
+
+        indexed: dict[str, dict[str, str]] = {}
+        for college_name, essay_text in raw.items():
+            if not isinstance(college_name, str) or not isinstance(essay_text, str):
+                continue
+            indexed[_normalize_school_name(college_name)] = {
+                "college_name": college_name,
+                "essay": essay_text,
+            }
+
+        COLLEGE_ESSAYS_INDEX = indexed
+        return indexed
+    except Exception as exc:
+        print(f"[WARN] Could not load college_essays.json: {exc}")
+        COLLEGE_ESSAYS_INDEX = {}
+        return {}
+
+
+def _lookup_college_essay(college_name: str, essays_index: dict[str, dict[str, str]]) -> Optional[dict[str, str]]:
+    if not college_name or not essays_index:
+        return None
+
+    norm = _normalize_school_name(college_name)
+    if norm in essays_index:
+        return essays_index[norm]
+
+    # Fuzzy fallback for minor naming differences
+    for indexed_name, essay_data in essays_index.items():
+        if norm and (norm in indexed_name or indexed_name in norm):
+            return essay_data
+
+    # Grouped-system fallback (e.g., "University of California" applies to UC campuses)
+    for grouped_name, aliases in GROUP_SCHOOL_ALIASES.items():
+        if grouped_name not in essays_index:
+            continue
+
+        # Full system prefix match, e.g. "university of california berkeley"
+        if norm.startswith(grouped_name):
+            return essays_index[grouped_name]
+
+        # Alias/prefix match, e.g. "suny buffalo", "cuny hunter", "uc berkeley"
+        for alias in aliases:
+            if norm == alias or norm.startswith(f"{alias} ") or norm.startswith(f"{alias}-"):
+                return essays_index[grouped_name]
+
+    return None
 
 
 def _lookup_college_rankings(college_name: Optional[str], rankings_index: dict) -> Optional[dict]:
@@ -558,6 +626,39 @@ async def get_colleges(
         k: v for k, v in preferences.items() if v is not None and v != [] and v != ""
     }
     return payload
+
+
+@app.get("/api/college-essays")
+@app.get("/api/essays")
+async def get_college_essays(
+    college_name: str = Query(..., description="College name to fetch essay prompts for"),
+):
+    essays_index = _get_college_essays_index()
+    if not essays_index:
+        return {
+            "query": college_name,
+            "found": False,
+            "college_name": None,
+            "essay": "",
+            "message": "Essay dataset not available",
+        }
+
+    essay_match = _lookup_college_essay(college_name, essays_index)
+    if not essay_match:
+        return {
+            "query": college_name,
+            "found": False,
+            "college_name": None,
+            "essay": "",
+            "message": f"No essays found for college: {college_name}",
+        }
+
+    return {
+        "query": college_name,
+        "found": True,
+        "college_name": essay_match["college_name"],
+        "essay": essay_match["essay"],
+    }
 
 if __name__ == "__main__":
     import uvicorn
